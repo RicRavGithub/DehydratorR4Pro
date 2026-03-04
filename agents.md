@@ -1,9 +1,11 @@
 # Project Master Reference: DRYMASTER PRO R4
 **Absolute Ground Truth for Development and AI Agents.**
+
 It's a controller of a peltier cell based system, that dehydrates and heats a cabinet containing 3D Print filament spools
 
 ## 🛠 1. Hardware Detailed Specifications
 Electronic is based on an Arduino R4 Minima with a display shield and extenal sensors and actuators.
+
 Details of hardware used is described in docs/circuit.md
 
 ## 🔌 2. Complete Pinout Mapping
