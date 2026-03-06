@@ -1,5 +1,4 @@
 # Software Logic Specification: DRYMASTER PRO R4
-**Version:** 1.2 (Implementation-Ready Master Spec)  
 **Target Hardware:** Arduino UNO R4 Minima (Renesas RA4M1)  
 **Document Type:** Absolute Ground Truth for Code Reconstruction  
 
@@ -239,3 +238,4 @@ When set to 0, code behaviour is as decribed, while when set to 1:
 3. Sensors are not initialized or used  
 4. ALARM_PAGE status is not triggered  
 5. All graphical and touch behaviours are as described  
+
