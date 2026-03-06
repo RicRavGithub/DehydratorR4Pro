@@ -3,22 +3,23 @@
 **Target Hardware:** Arduino UNO R4 Minima (Renesas RA4M1)  
 **Document Type:** Absolute Ground Truth for Code Reconstruction  
 
-## 1. Architettura del Sistema e Dipendenze
-Il firmware è strutturato come una Macchina a Stati Finiti (FSM) che orchestra il controllo termico, la sicurezza e l'interfaccia grafica.  
-Il sistema opera su un ciclo principale sincronizzato di 2000ms (2 secondi).
+## 1. System Architecture and Dependencies
+The firmware is implemented as a Finite State Machine (FSM) responsible for coordinating thermal control, safety management, and the graphical user interface.  
+The entire system operates on a synchronized main loop with a fixed cycle time of **2000 ms (2 seconds)**.
 
-### 1.1 Librerie Obbligatorie
-* **`R4_TFT_SPI_Touch.h` (Custom):** Libreria fondamentale per la gestione del controller ILI9486 e del touch XPT2046 tramite registri shift 74HC4094. Gestisce la risoluzione 480x320.
-* **`pid-autotune.h` (AhmedOsamPIN_PELTIER7):** Implementa l'algoritmo PID e la calibrazione automatica tramite metodo relay.
-* **`Adafruit_SHT31.h`:** Gestione del sensore ambientale I2C (SDA/SCL).
-* **`OneWire.h` & `DallasTemperature.h`:** Gestione del sensore di sicurezza barra DS18B20 su Pin A1.
-* **`EEPROM.h`:** Gestione della persistenza su memoria interna da 8KB.
-* **`bmp30x30.h` (Asset):** Contiene le icone bitmap per la dashboard (Temp, Hum, Power).
+### 1.1 Required Libraries
+* **`R4_TFT_SPI_Touch.h` (Custom):** Core library responsible for managing the ILI9486 display controller and the XPT2046 touch controller via 74HC4094 shift registers. Handles the **480×320 display resolution**.
+* **`pid-autotune.h` (AhmedOsam):** Implements the PID controller and automatic calibration using the **relay autotuning method**.
+* **`Adafruit_SHT31.h`:** Driver for the **I2C environmental sensor** (SDA/SCL).
+* **`OneWire.h` & `DallasTemperature.h`:** Driver stack for the **DS18B20 safety bar temperature sensor** connected to **PIN_DS18B20**.
+* **`EEPROM.h`:** Handles persistent storage using the **8KB internal EEPROM**.
+* **`bmp30x30.h` (Asset):** Contains **30×30 bitmap icons** used by the dashboard (Temperature, Humidity, Power).
 
-### 1.2 Assegnazione dei pin
-* L'assegnazione dei PIN è obbligata dal circuito fisico in cui opera l'Arduino e pertanto non può essere modificata.  
-* Il codice non dovrà mai usare altri termini per identificare un PIN che non siano i nomi nelle define sottostanti.  
-Pin definiti nella libreria R4_TFT_SPI_Touch:  
+### 1.2 Pin Assignment
+* The **pin mapping is fixed by the physical hardware design** and **must not be modified**.
+* The firmware **must never refer to pins using identifiers other than the defines listed below**.
+
+Pins defined in the `R4_TFT_SPI_Touch` library:  
 #define PIN_PIR_D2      2  
 #define PIN_TP_IRQ      3  
 #define PIN_TP_CS       4  
@@ -31,94 +32,210 @@ Pin definiti nella libreria R4_TFT_SPI_Touch:
 #define PIN_SPI_MOSI    11  
 #define PIN_SPI_MISO    12  
 #define PIN_SPI_SCK     13  
-Pin da definire all'inizio dello sketch:  
+
+Pins that must be defined at the beginning of the sketch:  
 #define PIN_PELTIER     A0  
 #define PIN_DS18B20     A1  
 #define PIN_SHT31_SDA   A4  
 #define PIN_SHT31_SCL   A5  
 
-## 2. Global FSM: Stati e Navigazione
-Il sistema si trova sempre in uno dei seguenti stati definiti tramite `enum States`:
+## 2. Global FSM: States and Navigation
+At any moment the system is in exactly **one FSM state**, defined via `enum States`.
 
-| Stato | Descrizione | Trigger di Uscita |
+| State | Description | Exit Trigger |
 | :--- | :--- | :--- |
-| **MAIN_PAGE** | Dashboard principale con dati e grafici real-time. | Pressione tasti "SET" o "TUNE". |
-| **SETPOINT_PAGE** | Regolazione del target termico (20-90°C). | Tasti "+" e "-", "SAVE" (scrive EEPROM) e "CANCEL". |
-| **INFO_PAGE** | Diagnostica: versioni EEPROM, tutti i valori grezzi dei sensori, stato PWM, set point. | Pressione tasto "BACK". |
-| **AUTOTUNE_CONFIRM** | Schermata di avviso pre-calibrazione. | "YES" avvia autotune; "NO" torna alla Main. |
-| **AUTOTUNE_RUNNING** | Monitoraggio attivo del processo di calibrazione. | Completamento automatico o tasto "ABORT". |
-| **ALARM_PAGE** | Blocco di sicurezza (schermo rosso). | Reset manuale con apposito tasto o automatico dopo rientro nei parametri. |
+| **MAIN_PAGE** | Main dashboard displaying real-time values and graphs. | Pressing the "SET" or "TUNE" buttons. |
+| **SETPOINT_PAGE** | Adjustment of the temperature target (20–90°C). | "+" and "-" buttons, "SAVE" (writes to EEPROM), or "CANCEL". |
+| **INFO_PAGE** | Diagnostics screen showing EEPROM versions, all raw sensor values, PWM state, and setpoint. | Pressing the "BACK" button. |
+| **AUTOTUNE_CONFIRM** | Warning screen shown before starting calibration. | "YES" starts autotune; "NO" returns to the Main page. |
+| **AUTOTUNE_RUNNING** | Active monitoring of the autotuning process. | Automatic completion or pressing the "ABORT" button. |
+| **ALARM_PAGE** | Safety lock state (red screen). | Manual reset via button or automatic recovery once parameters return within safe limits. |
 
-## 3. Elaborazione Sensori e "Aggressive Filtering"
-Per compensare il rumore elettrico, il sistema applica una media mobile sugli ultimi 8 valori.
+## 3. Sensor Processing and "Aggressive Filtering"
+To mitigate electrical noise and sensor fluctuations, the firmware applies **rolling average filtering** on recent measurements.
 
-### 3.1 Rolling Average (8 Campioni)
-* Ogni 2000ms viene effettuata una lettura dai sensori SHT31 e DS18B20.
-* I dati sono inseriti in un buffer circolare di 8 posizioni per ogni variabile (Aria T, Aria RH, Barra T).
-* La logica di filtraggio calcola la media aritmetica degli 8 campioni più recenti.
-* Il valore risultante è l'unico utilizzato dal PID e visualizzato sulla UI per garantire stabilità.
+### 3.1 Rolling Average (8 Samples)
+* Every **2000 ms**, new readings are acquired from the **SHT31** and **DS18B20** sensors.
+* Each measured variable (**Air Temperature, Air Relative Humidity, Bar Temperature**) is stored in a **circular buffer of 8 samples**.
+* The filtering logic computes the **arithmetic mean of the most recent 8 samples**.
+* The resulting filtered value is **the only value used by the PID controller and displayed in the UI**, ensuring stable readings.
 
-### 3.2 Matematica dell'Umidità Assoluta ($g/m^3$)
-Utilizzando la temperatura media ($T$) e l'umidità relativa media ($RH$), il software calcola:
-1. **Pressione di vapore saturo:** $$E_s = 6.112 \times e^{(17.67 \times T) / (T + 243.5)}$$
-2. **Umidità Assoluta ($AH$):** $$AH = (E_s \times (RH / 100.0) \times 216.74) / (273.15 + T)$$
+### 3.2 Absolute Humidity Calculation ($g/m^3$)
+Using the filtered **temperature ($T$)** and **relative humidity ($RH$)** values, the firmware computes:
 
-## 4. Gestione Memoria (Circular Wear Leveling)
-Per proteggere la EEPROM interna, si utilizza un sistema con logica **Circular Buffer Wear Leveling**, che sfrutta tutti gli 8KB di EEPROM disponibili.
+1. **Saturated vapor pressure**
 
-* **`Config struct`:** Struttura di 15 byte, che contiene `uint16_t version`, `uint8_t setpoint` e `float kp, ki, kd`.
-* **Boot Scan:** All'avvio, scansiona la EEPROM cercando il record con la `version` più alta.
-* Se non viene trovato (memoria vergine), vengono caricati i valori di default.
-* La logica gestisce anche il passaggio per lo 0: se sono presenti sia version 0xFFFF che 0x0000, cerca il valore più alto del nuovo ciclo.
-* **Save Logic:** Il salvataggio avviene solo su conferma utente ("SAVE") o al termine di un Autotune riuscito. Il nuovo record viene scritto nell'indirizzo successivo, garantendo una distribuzione uniforme dei cicli di scrittura.
+$$E_s = 6.112 \times e^{(17.67 \times T) / (T + 243.5)}$$
 
-## 5. Controllo Termico (PID & Slow PWM)
+2. **Absolute Humidity ($AH$)**
+
+$$AH = (E_s \times (RH / 100.0) \times 216.74) / (273.15 + T)$$
+
+## 4. Memory Management (Circular Wear Leveling)
+To protect the internal EEPROM from excessive write cycles, the firmware implements a **Circular Buffer Wear Leveling strategy**, utilizing the entire **8KB EEPROM space**.
+
+* **`Config struct`:** A **15-byte structure** containing:
+  * `uint16_t version`
+  * `uint8_t setpoint`
+  * `float kp, ki, kd`
+
+* **Boot Scan:**  
+  At startup, the firmware scans the EEPROM to locate the record with the **highest `version` value**.
+
+* If no valid record is found (blank memory), **default values are loaded**.
+
+* The logic also correctly handles **version rollover**:  
+  if both **0xFFFF and 0x0000** versions are present, the firmware searches for the **highest value belonging to the new cycle**.
+
+* **Save Logic:**  
+  Configuration data is written **only**:
+  - after explicit user confirmation ("SAVE"), or  
+  - after a **successful Autotune**.
+
+  The new record is written to the **next EEPROM address**, ensuring even distribution of write cycles across memory.
+
+## 5. Thermal Control (PID & Slow PWM)
+
 ### 5.1 Slow PWM Logic (Pin PIN_PELTIER)
-Data l'inerzia termica, il MOSFET è pilotato con una frequenza di 0.5Hz.
-* **Finestra temporale:** 2000ms.
-* **Duty Cycle:** Il PID calcola un valore di output compreso tra 0 e 2000, l'output viene applicato al pin PIN_PELTIER, che resta HIGH per un numero di ms pari al valore di output del pid e low per i restanti fino ad arrivare a 2000ms.
-* **Safety Lock:** In caso di allarme, il Pin PIN_PELTIER viene forzato a LOW indipendentemente dal PID.
+Due to the system’s **high thermal inertia**, the MOSFET controlling the Peltier module is driven using **low-frequency PWM (0.5 Hz)**.
+
+* **Time Window:** 2000 ms
+* **Duty Cycle:**  
+  The PID controller outputs a value in the range **0–2000**.  
+  This value determines the ON duration of the output within the 2000 ms window:
+
+  - `PIN_PELTIER` stays **HIGH** for a number of milliseconds equal to the PID output value.
+  - It then remains **LOW** for the remaining time until the 2000 ms window ends.
+
+* **Safety Lock:**  
+  If an alarm condition occurs, pid class disable() method is executed and `PIN_PELTIER` is anyway **forced LOW regardless of PID output**.
 
 ### 5.2 PID Autotune
-Viene utilizzato il metodo dell'oscillazione a relè per calcolare i coefficienti ottimali. Durante questa fase, il setpoint viene mantenuto fisso e il sistema monitora i picchi di temperatura per derivare il guadagno e il periodo critico.
+The PID parameters are determined using the **relay oscillation method**.
+
+During this process:
+
+* The **setpoint remains fixed**.
+* The system monitors **temperature oscillation peaks**.
+* From these oscillations, the firmware calculates the **critical gain** and **critical period**, which are then used to derive optimal **PID coefficients**.
 
 ## 6. Graphical User Interface (GUI) & Touch
-### 6.1 Layout Dashboard (MAIN_PAGE)
-* **Colori:** ogni grandezza fisica ha assegnato il proprio colore, da usare per scritte e bordi nei quattro box in alto, nelle tracce del grafico e come colore dei pulsanti footer:
 
-| Grandezza | Alias #define nello sketch | Nome colore nella libreria R4_TFT_SPI_Touch |
+### 6.1 Dashboard Layout (MAIN_PAGE)
+
+* **Colors:**  
+Each physical quantity has a dedicated color used for:
+  - text and borders in the four top boxes
+  - chart traces
+  - footer button colors
+
+| Quantity | Alias #define in sketch | Color name in R4_TFT_SPI_Touch library |
 | :--- | :--- | :--- |
-| Temperatura Aria | COL_TEMP_ARIA | COLOR_RED_VIVID |
+| Air Temperature | COL_TEMP_ARIA | COLOR_RED_VIVID |
 | Relative Humidity (%) | COL_REL_HUM | COLOR_BLUE_CYAN |
 | Absolute Humidity | COL_ABS_HUM | COLOR_GREEN_EMERALD |
 | PWM (%) | COL_PWM | COLOR_YELLOW_VIVID |
-| Temperatura Barra | COL_BAR | COLOR_WHITE |
+| Bar Temperature | COL_BAR | COLOR_WHITE |
 
-* **Top Bar (Icons):** 4 box (120x40px) con icone 30x30 a destra e valori, con unità di misura per Temperatura Aria, Relative Humidity %, Absolute Humidity, PWM (%).
-* **Rolling Chart:** Grafico centrale aggiornato ogni 10 secondi con 235 campioni storici.
-    * **Tracce:** Temperatura Aria, Relative Humidity %, Absolute Humidity, PWM (%).
-    * **Setpoint:** Una linea tratteggiata, anch'essa di colore COL_TEMP_ARIA, rappresenta il valore target impostato, permettendo di valutare visivamente l'errore di inseguimento.
-* **Pulsanti Footer:** Disegnati con funzione `drawButton3D()` per effetto rilievo. A sinistra la Temperatura Barra, a destra il Setpoint
-* **Titolo:** In mezzo tra i due Pulsanti Footer, la scritta "DRYMASTER PRO R4"
+The software must define the color names as in the second column, as alias of the corrisponding color in the library and use only these in the code.  
 
-### 6.2 Gestione Retroilluminazione (D9)
-* **Trigger**: Attivato dal sensore PIR (D2) o dal tocco sul display.
-* **Fade-In**: Aumento rapido della luminosità PWM fino al 100%.
-* **Fade-Out**: Dopo 5 minuti (300.000ms) di inattività, la luminosità decresce lentamente fino allo spegnimento totale.
+* **Top Bar (Icons):**  
+Four boxes (**120×40 px**) containing values and measurement units, with **30×30 icons aligned on the right** for:
+  - Air Temperature
+  - Relative Humidity %
+  - Absolute Humidity
+  - PWM %
 
-### 6.3 Logica dei Tocchi (XPT2046)
-Il software mappa le coordinate touch per gestire le interazioni:
-* **SET:** In MAIN_PAGE, `x > 340, y > 270` (Passa a `SETPOINT_PAGE`).
-* **TUNE:** In MAIN_PAGE, `x < 140, y > 270` (Passa a `AUTOTUNE_CONFIRM`).
-* **INFO:** In MAIN_PAGE,  `140 < x < 340, y > 270` (Passa a `INFO_PAGE`).
-* **Setpoint +/-, SAVE; CANCEL:** In SETPOINT_PAGE, Regolazione di `tempSetpointTmp` prima del salvataggio, salvataggio, ritorno a MIAN_PAGE senza cambiare il Setpoint.
+* **Rolling Chart:**  
+Central graph updated **every 10 seconds** and storing **235 historical samples**.
 
-## 7. Watchdog e Sicurezza Hardware
-La logica di sicurezza ha la precedenza su tutte le altre funzioni del loop.
-Il sistema esegue un controllo critico ad ogni iterazione del loop se si verifica almeno una delle seguenti:
-1. **Soglia Barra:** Se Barra T > 115°C.
-2. **Soglia Aria:** Se Aria T > 95°C.
-3. **Integrità:** Errore di comunicazione con SHT31 o DS18B20 (NaN).
-4. **Lentezza:** La temperatura della barra non sale abbastanza in fretta: a pieno carico, la soglia è 1°C/minuto, per altri valori di PWM, in proporzione; la condizione serve ad identificare un possibile distacco di qualche elemento.
-* **Azione:** Salto immediato a `ALARM_PAGE`, Pin A0 LOW, disabilitazione interrupt e segnale visivo rosso.
+  **Displayed traces:**
+  - Air Temperature
+  - Relative Humidity %
+  - Absolute Humidity
+  - PWM %
 
+  **Setpoint Indicator:**  
+  A **dashed line** (color `COL_TEMP_ARIA`) represents the configured target temperature, allowing visual evaluation of tracking error.
+
+* **Footer Buttons:**  
+Rendered using the `drawButton3D()` function to produce a **raised button effect**.
+
+  - Left: **Bar Temperature**
+  - Right: **Setpoint**
+
+* **Title:**  
+Centered between the two footer buttons: **"DRYMASTER PRO R4"**
+
+### 6.2 Backlight Management (D9)
+
+* **Trigger:**  
+  Activated by the **PIR motion sensor (D2)** or by **touch interaction** on the display.
+
+* **Fade-In:**  
+  Rapid PWM ramp-up to **25% brightness**.
+
+* **Fade-Out:**  
+  After **5 minutes (300,000 ms)** of inactivity, brightness gradually decreases until **complete shutdown**.
+
+### 6.3 Touch Logic (XPT2046)
+
+Touch coordinates are mapped to UI actions as follows:
+
+* **SET:**  
+  In `MAIN_PAGE`, `x > 340, y > 270` → transition to `SETPOINT_PAGE`.
+
+* **TUNE:**  
+  In `MAIN_PAGE`, `x < 140, y > 270` → transition to `AUTOTUNE_CONFIRM`.
+
+* **INFO:**  
+  In `MAIN_PAGE`, `140 < x < 340, y > 270` → transition to `INFO_PAGE`.
+
+* **Setpoint + / -, SAVE, CANCEL:**  
+  In `SETPOINT_PAGE`, the variable `tempSetpointTmp` is modified before saving.  
+  The user may:
+  - save the new value
+  - or return to `MAIN_PAGE` without modifying the stored setpoint.
+
+## 7. Watchdog and Hardware Safety
+
+Safety logic **has priority over all other loop operations**.
+
+At every loop iteration, the system checks for the following critical conditions:
+
+1. **Bar Temperature Threshold**  
+   If **Bar T > 115°C**
+
+2. **Air Temperature Threshold**  
+   If **Air T > 95°C**
+
+3. **Sensor Integrity Failure**  
+   Communication error with **SHT31 or DS18B20** resulting in **NaN values**
+
+4. **Thermal Response Too Slow**  
+   The bar temperature does not increase quickly enough.
+
+   * At **full load**, the minimum acceptable rate is **1°C per minute**.
+   * At lower PWM levels, the threshold is **proportionally scaled**.
+
+   This condition is used to detect a **possible mechanical detachment or failure of heating elements**.
+
+* **Action:**  
+  Immediate transition to `ALARM_PAGE`,  
+  PID disabling,  
+  `Pin PIN_PELTIER` forced **LOW**,  
+  **interrupts disabled**,  
+  and a **red visual alarm signal** is displayed.
+
+## 8. Simulation Mode
+
+The code must include a  
+`#define SIMULATION_MODE 1`  
+It's used to test the code, without sensors attached to the system.  
+
+When set to 0, code behaviour is as decribed, while when set to 1:  
+1. All Physical values are computed using a sinusoidal with 5 minutes interval  
+2. Backlight is fixed to 25% brigthness
+3. Sensors are not initialized or used  
+4. ALARM_PAGE status is not triggered  
+5. All graphical and touch behaviours are as described  
