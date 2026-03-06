@@ -44,7 +44,7 @@ At any moment the system is in exactly **one FSM state**, defined via `enum Stat
 | State | Description | Exit Trigger |
 | :--- | :--- | :--- |
 | **MAIN_PAGE** | Main dashboard displaying real-time values and graphs. | Pressing the "SET" or "TUNE" buttons. |
-| **SETPOINT_PAGE** | Adjustment of the temperature target (20–90°C). | "+" and "-" buttons, "SAVE" (writes to EEPROM), or "CANCEL". |
+| **SETPOINT_PAGE** | Adjustment of the temperature target (40–90°C). | "+" and "-" buttons, "SAVE" (writes to EEPROM), or "CANCEL". |
 | **INFO_PAGE** | Diagnostics screen showing EEPROM versions, all raw sensor values, PWM state, and setpoint. | Pressing the "BACK" button. |
 | **AUTOTUNE_CONFIRM** | Warning screen shown before starting calibration. | "YES" starts autotune; "NO" returns to the Main page. |
 | **AUTOTUNE_RUNNING** | Active monitoring of the autotuning process. | Automatic completion or pressing the "ABORT" button. |
@@ -130,7 +130,7 @@ Each physical quantity has a dedicated color used for:
 
 | Quantity | Alias #define in sketch | Color name in R4_TFT_SPI_Touch library |
 | :--- | :--- | :--- |
-| Air Temperature | COL_TEMP_ARIA | COLOR_RED_VIVID |
+| Air Temperature | COL_TEMP_AIR | COLOR_RED_VIVID |
 | Relative Humidity (%) | COL_REL_HUM | COLOR_BLUE_CYAN |
 | Absolute Humidity | COL_ABS_HUM | COLOR_GREEN_EMERALD |
 | PWM (%) | COL_PWM | COLOR_YELLOW_VIVID |
@@ -155,7 +155,7 @@ Central graph updated **every 10 seconds** and storing **235 historical samples*
   - PWM %
 
   **Setpoint Indicator:**  
-  A **dashed line** (color `COL_TEMP_ARIA`) represents the configured target temperature, allowing visual evaluation of tracking error.
+  A **dashed line** (color `COL_TEMP_AIR`) represents the configured target temperature, allowing visual evaluation of tracking error.
 
 * **Footer Buttons:**  
 Rendered using the `drawButton3D()` function to produce a **raised button effect**.
@@ -212,11 +212,11 @@ At every loop iteration, the system checks for the following critical conditions
    Communication error with **SHT31 or DS18B20** resulting in **NaN values**
 
 4. **Thermal Response Too Slow**  
-   The bar temperature does not increase quickly enough.
-
-   * At **full load**, the minimum acceptable rate is **1°C per minute**.
-   * At lower PWM levels, the threshold is **proportionally scaled**.
-
+   The bar temperature may not increase quickly enough due to HW issues.  
+   This formula must be applied to verify the thermal response of the bar:  
+   $$V_{risc} = 0.024 \cdot \left[ (0.72 \cdot PWM) - 2.1 \cdot (T_{bar} - T_{air}) \right]$$    
+   A good initial threshold, to be later on verified in the field, is to apply an alarm threashold to 50% of this value, only when the expected velocity is at least 0.5°C/minute
+   
    This condition is used to detect a **possible mechanical detachment or failure of heating elements**.
 
 * **Action:**  
